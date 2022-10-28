@@ -1,9 +1,18 @@
+#include <chrono>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <random>
+#include <sstream>
+#include <string>
 #include <vector>
 
 using real_t = double;
 
+using clock_timer_t = std::chrono::steady_clock;
+
+///////////////////////////////////////////////////////////////////////////////
+/// Uniform random number generator
 class rand_t {
     std::mt19937 gen_;
     std::uniform_real_distribution<> dist_;
@@ -11,7 +20,7 @@ class rand_t {
 
 public:
     template<typename T>
-    rand_t(const T & seed) :
+    rand_t(real_t a, real_t b, T seed = static_cast<real_t>(0)) :
       gen_(seed), dist_(-0.5, 0.5)
     {}
 
@@ -19,9 +28,13 @@ public:
     { return dist_(gen_); }
 };
 
+///////////////////////////////////////////////////////////////////////////////
+/// Return size of FCC lattice.  Note, only the repeating portion is needed.
 int lattice_size_fcc()
 { return 4; }
 
+///////////////////////////////////////////////////////////////////////////////
+/// Place particles on the FCC lattice
 void init_fcc(
     real_t * x,
     const int * num_cells)
@@ -50,30 +63,30 @@ void init_fcc(
     for (int i=0, pos=0; i<num_cells[0]; ++i)
         for (int j=0; j<num_cells[1]; ++j)
             for (int k=0; k<num_cells[2]; ++k)
-                for (int l=0, lpos=0; l<lattice_size; ++l, ++pos)
+                for (int l=0; l<lattice_size; ++l, ++pos)
                 {
-                    x[3*pos + 0] = i + lattice[3*lpos+0];
-                    x[3*pos + 1] = j + lattice[3*lpos+1];
-                    x[3*pos + 2] = k + lattice[3*lpos+2];
+                    x[3*pos + 0] = i + lattice[3*l+0];
+                    x[3*pos + 1] = j + lattice[3*l+1];
+                    x[3*pos + 2] = k + lattice[3*l+2];
                 }
 
 }
 
+///////////////////////////////////////////////////////////////////////////////
+/// Initialize an array with random numbers between -0.5 and 0.5
 void init_random(
     real_t * v,
     int num_part)
 {
-    rand_t rand(0);
+    rand_t rand(-0.5, 0.5, 0);
 
-    for (int i=0; i<num_part; ++i)
-    {
-        for (int d=0; d<3; ++d) {
-            auto pos = i*3 + d;
+    for (int i=0, pos=0; i<num_part; ++i)
+        for (int d=0; d<3; ++d, ++pos)
             v[pos] = rand();
-        }
-    }
 }
 
+///////////////////////////////////////////////////////////////////////////////
+/// Compute a dot product of an array with itself
 real_t dot_product(
     real_t * v,
     int num_part)
@@ -92,6 +105,8 @@ real_t dot_product(
 }
 
 
+///////////////////////////////////////////////////////////////////////////////
+/// Scale an array
 void scale(
     real_t * v,
     real_t fact,
@@ -103,6 +118,8 @@ void scale(
 
 }
 
+///////////////////////////////////////////////////////////////////////////////
+/// Remove linear momentum
 void linear_mom(real_t * v, int num_parts)
 {
 
@@ -120,6 +137,8 @@ void linear_mom(real_t * v, int num_parts)
     
 }
 
+///////////////////////////////////////////////////////////////////////////////
+/// Move particles
 void positions(
     const real_t * v,
     const real_t * a,
@@ -132,6 +151,8 @@ void positions(
         x[pos] += v[pos]*dt + 0.5*dt_sqr*a[pos];
 }
 
+///////////////////////////////////////////////////////////////////////////////
+/// Apply periodic boundaries
 void periodic(real_t * x, const real_t * box_length, int num_part)
 {
     for (int p=0, pos=0; p<num_part; ++p)
@@ -150,6 +171,8 @@ void periodic(real_t * x, const real_t * box_length, int num_part)
 }
 
 
+///////////////////////////////////////////////////////////////////////////////
+/// Compute forces
 real_t forces(
     const real_t * x,
     real_t * f,
@@ -161,17 +184,17 @@ real_t forces(
     for (int pos=0; pos<num_part*3; ++pos)
         f[pos] = 0;
 
-    for (int i=0; i<num_part; ++i)
-        for (int j=0; j<num_part; ++j)
+    for (int i=0; i<num_part-1; ++i)
+        for (int j=i+1; j<num_part; ++j)
         {
-            if (i != j) {
+            //if (i != j) {
                 // distance
                 real_t xr[3] = {
                     x[3*i + 0] - x[3*j + 0],
                     x[3*i + 1] - x[3*j + 1],
                     x[3*i + 2] - x[3*j + 2],
                 };
-                // periodic boundary conditions
+                // minimum image criterion
                 for (int d=0; d<3; ++d)
                     xr[d] -= std::round(xr[d] / box_length[d]) * box_length[d];
                 // dot product
@@ -182,17 +205,21 @@ real_t forces(
                 auto r6 = std::pow(r2, 3);
                 // force
                 auto dvdr = 48 * r2 * r6 * ( r6 - 0.5 ); 
-                for (int d=0; d<3; ++d)
+                for (int d=0; d<3; ++d) {
                     f[i*3 + d] += dvdr * xr[d];
+                    f[j*3 + d] -= dvdr * xr[d];
+                }
                 // energy
                 auto pot = 4 * r6 * ( r6 - 1 );
                 en += pot;
-            }
+            //}
         }
 
     return en / 2;
 }
 
+///////////////////////////////////////////////////////////////////////////////
+/// Update acceleration and velocity
 void accel(
     const real_t * f,
     real_t * v,
@@ -209,6 +236,41 @@ void accel(
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////
+/// Output solution in CSV format
+void output(int n, const real_t * x, const real_t * v, int num_parts, int max_digits)
+{
+	std::stringstream ss;
+	ss << "atoms";
+	ss << std::setw(max_digits) << std::setfill('0') << n;
+	ss << ".csv";
+
+	std::ofstream file(ss.str());
+
+	file << std::scientific;
+	file.precision(12);
+		
+    file << "x, y, z, vx, vy, vz" << std::endl;
+
+	for (int i=0; i<num_parts; ++i) {
+		file << x[3*i] << ", " << x[3*i+1] << ", " << x[3*i+2] << ", ";
+		file << v[3*i] << ", " << v[3*i+1] << ", " << v[3*i+2] << std::endl;
+	}
+
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/// How many digits in an integer
+int num_digits(int n) {
+	if (n)
+		return std::floor(std::log10(std::abs((real_t) n)) + 1);
+	else
+		return 1;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+/// Driver
+///////////////////////////////////////////////////////////////////////////////
 int main(int argc, char* argv[])
 {
     // 0. Inputs
@@ -224,9 +286,16 @@ int main(int argc, char* argv[])
     // lattice constant
     real_t lattice_constant = std::pow( 2., 2./3. );
     // time step
-    real_t dt = 0.001;
+    real_t dt = 1.e-3;
     // number of steps
-    int num_steps = 1;
+    int num_steps = 1000;
+    // start time
+    real_t start_time = 0;
+    // output frequency
+    int output_freq = 0;
+
+    // get max digits expected
+    int max_digits = num_digits(num_steps);
 
     // count total cells
     int num_cells = dims[0]*dims[1]*dims[2];
@@ -237,7 +306,7 @@ int main(int argc, char* argv[])
         dims[1] * lattice_constant,
         dims[2] * lattice_constant,
     };
-    
+
     // 1. Place particles on a lattice
 
     // total particles
@@ -253,7 +322,7 @@ int main(int argc, char* argv[])
         xi *= lattice_constant;
 
     // 2. Give particles random velocities
-    std::vector<real_t> v(num_parts);
+    std::vector<real_t> v(num_parts*3);
     init_random(v.data(), num_parts);
 
     // remove linear momentum
@@ -266,25 +335,49 @@ int main(int argc, char* argv[])
     auto fac = std::sqrt(temperature / T0 );
     scale(v.data(), fac, num_parts);
 
+    std::cout << "md>> Initial temperature: " << T0 << std::endl;
+
+    int output_counter = 0;
+    
+    if (output_freq) {
+        std::cout << "md>> outputing: " << output_counter << std::endl;
+    	output(output_counter++, x.data(), v.data(), num_parts, max_digits);
+    }
+
     // start integration
     std::vector<real_t> a(3*num_parts, 0); 
-    for (int n=0; n<num_steps; ++n)
+    std::vector<real_t> f(3*num_parts);
+
+    std::cout << "md>> " << std::string(73, '=') << std::endl;
+    std::cout << "md>> " << "| " << std::setw(15) << "Iteration" << " | ";
+    std::cout << std::setw(15) << "Soln Time" << " | ";
+    std::cout << std::setw(15) << "Temperature" << " | ";  
+    std::cout << std::setw(15) << "Elapsed Time, s" << " |";
+    std::cout << std::endl;
+    std::cout << "md>> " << std::string(73, '=') << std::endl;
+	
+
+    auto t = start_time;
+    auto elapsed_start = clock_timer_t::now();
+
+    int iter = 0;
+
+    for (; iter<num_steps; ++iter, t+=dt)
     {
 
         // 3. get new atom positions
         positions(v.data(), a.data(), x.data(), dt, num_parts);
         periodic(x.data(), box_length, num_parts);
-
+        
         // 4. compute forces
-        std::vector<real_t> f(3, num_parts);
         auto en = forces(x.data(), f.data(), box_length, num_parts);
 
         // 5. accleration
         accel(f.data(), v.data(), a.data(), mass, dt, num_parts);
-
+        
         // remove linear momentum
         linear_mom(v.data(), num_parts);
-
+        
         // scale velocities
         auto num_dofs = 3*(num_parts - 1);
         auto ke0 = dot_product(v.data(), num_parts);
@@ -292,9 +385,32 @@ int main(int argc, char* argv[])
         auto fac = std::sqrt(temperature / T0 );
         scale(v.data(), fac, num_parts);
 
-        std::cout << "Temperature = " << T0 << std::endl;
-
+        std::chrono::duration<real_t> elapsed = clock_timer_t::now() - elapsed_start;
+        auto ss = std::cout.precision();
+    	std::cout << "md>> " << "| " << std::setw(15) << std::fixed << iter+1 << " | ";
+    	std::cout << std::setw(15) << std::scientific << t+dt << " | ";
+    	std::cout << std::setw(15) << std::scientific << T0 << " | ";  
+    	std::cout << std::setw(15) << std::scientific << elapsed.count() << " |";
+    	std::cout << std::endl; 
+        std::cout.precision(ss);
+	    std::cout.unsetf( std::ios::scientific );
+    
+	    // 5. output
+	    if (output_freq && ((iter+1) % output_freq == 0)) {
+            std::cout << "md>> outputing: " << output_counter << std::endl;
+    		output(output_counter++, x.data(), v.data(), num_parts, max_digits);
+	    }
+        
     } // nstep
+	
+    // 5. output
+    if (output_freq && (iter % output_freq != 0)) {
+        std::cout << "md>> outputing: " << output_counter << std::endl;
+        output(output_counter++, x.data(), v.data(), num_parts, max_digits);
+    }
+
+    std::chrono::duration<real_t> elapsed = clock_timer_t::now() - elapsed_start;
+    std::cout << "md>> Total elapsed time (s): " << elapsed.count() << std::endl;
 
     return 0;
 }
