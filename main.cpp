@@ -273,7 +273,7 @@ int num_digits(int n) {
 ///////////////////////////////////////////////////////////////////////////////
 int main(int argc, char* argv[])
 {
-    // 0. Inputs
+    // Inputs
 
     // temperature
     real_t temperature = 10;
@@ -307,7 +307,7 @@ int main(int argc, char* argv[])
         dims[2] * lattice_constant,
     };
 
-    // 1. Place particles on a lattice
+    // Place particles on a lattice
 
     // total particles
     auto size_lattice = lattice_size_fcc();
@@ -321,7 +321,7 @@ int main(int argc, char* argv[])
     for (auto & xi : x )
         xi *= lattice_constant;
 
-    // 2. Give particles random velocities
+    // Give particles random velocities
     std::vector<real_t> v(num_parts*3);
     init_random(v.data(), num_parts);
 
@@ -365,14 +365,14 @@ int main(int argc, char* argv[])
     for (; iter<num_steps; ++iter, t+=dt)
     {
 
-        // 3. get new atom positions
+        // get new atom positions
         positions(v.data(), a.data(), x.data(), dt, num_parts);
         periodic(x.data(), box_length, num_parts);
         
-        // 4. compute forces
+        // compute forces
         auto en = forces(x.data(), f.data(), box_length, num_parts);
 
-        // 5. accleration
+        // accleration
         accel(f.data(), v.data(), a.data(), mass, dt, num_parts);
         
         // remove linear momentum
@@ -395,7 +395,7 @@ int main(int argc, char* argv[])
         std::cout.precision(ss);
 	    std::cout.unsetf( std::ios::scientific );
     
-	    // 5. output
+	    // output
 	    if (output_freq && ((iter+1) % output_freq == 0)) {
             std::cout << "md>> outputing: " << output_counter << std::endl;
     		output(output_counter++, x.data(), v.data(), num_parts, max_digits);
@@ -403,7 +403,7 @@ int main(int argc, char* argv[])
         
     } // nstep
 	
-    // 5. output
+    // output
     if (output_freq && (iter % output_freq != 0)) {
         std::cout << "md>> outputing: " << output_counter << std::endl;
         output(output_counter++, x.data(), v.data(), num_parts, max_digits);
