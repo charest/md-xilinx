@@ -1,0 +1,15 @@
+temperature 10
+boltzmann 1
+mass 1
+
+dim 10 10 10
+
+# lattice_constant = pow( 2., 2./3. );
+box 1.5874010519681994 1.5874010519681994 1.5874010519681994
+
+dt 1.e-3
+num_steps 1000
+
+# start_time 0
+output_freq 0
+stats_freq 10

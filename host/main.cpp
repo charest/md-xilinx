@@ -1,3 +1,6 @@
+#include "args.hpp"
+#include "input.hpp"
+
 #include <chrono>
 #include <fstream>
 #include <iomanip>
@@ -118,6 +121,17 @@ void scale(
 
 }
 
+void scale(
+    real_t * v,
+    real_t * fact,
+    int num_part)
+{
+    for (int i=0; i<num_part; ++i)
+        for (int d=0, pos=i*3; d<3; ++d, ++pos)
+            v[pos] *= fact[d];
+
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 /// Remove linear momentum
 void linear_mom(real_t * v, int num_parts)
@@ -235,6 +249,23 @@ void accel(
         a[pos] = acc;
     }
 }
+    
+///////////////////////////////////////////////////////////////////////////////
+/// Scale velocityies
+real_t scale_velocity(
+    real_t * v,
+    real_t mass,
+    real_t temperature,
+    real_t boltzmann,
+    int num_parts)
+{
+    auto num_dofs = 3*(num_parts - 1);
+    auto ke0 = dot_product(v, num_parts);
+    auto T0 = mass * ke0 / (boltzmann*num_dofs);
+    auto fac = std::sqrt(temperature / T0 );
+    scale(v, fac, num_parts);
+    return T0;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 /// Output solution in CSV format
@@ -269,42 +300,56 @@ int num_digits(int n) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+/// Print usae
+///////////////////////////////////////////////////////////////////////////////
+void print_usage(char * cmd)
+{
+    std::cout << cmd << " [-h] [-f <xlcbin>] -i <input_file>" << std::endl;
+    std::cout << "\t -h \t\t Print this help message." << std::endl;
+    std::cout << "\t -f <xlcbin> \t Load <xlcbin> kernel image." << std::endl;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
 /// Driver
 ///////////////////////////////////////////////////////////////////////////////
 int main(int argc, char* argv[])
 {
+    
+    // command line arguments
+    if(cmd_option_exists(argv, argv+argc, "-h"))
+    {
+        print_usage(argv[0]);
+        return 0;
+    }
+
+    char * input_filename = get_cmd_option(argv, argv + argc, "-i");
+    if (!input_filename) {
+        std::cout << "No input specified." << std::endl;
+        print_usage(argv[0]);
+        return 1;
+    }
+   
+#ifdef HAVE_VITIS 
+    char * xlcbin_filename = get_cmd_option(argv, argv + argc, "-f");
+#endif
+    
     // Inputs
-
-    // temperature
-    real_t temperature = 10;
-    // boltzmann constant
-    real_t boltzmann = 1;
-    // mass
-    real_t mass = 1;
-    // grid
-    int dims[] = {10, 10, 10};
-    // lattice constant
-    real_t lattice_constant = std::pow( 2., 2./3. );
-    // time step
-    real_t dt = 1.e-3;
-    // number of steps
-    int num_steps = 1000;
-    // start time
-    real_t start_time = 0;
-    // output frequency
-    int output_freq = 0;
-
+    std::cout << "md>> Loading inputs: '" << input_filename << "'" << std::endl;
+    input_t inputs(input_filename);
+    std::cout << std::endl << inputs << std::endl << std::endl;
+    
     // get max digits expected
-    int max_digits = num_digits(num_steps);
+    int max_digits = num_digits(inputs.num_steps);
 
     // count total cells
-    int num_cells = dims[0]*dims[1]*dims[2];
+    int num_cells = inputs.dims[0]*inputs.dims[1]*inputs.dims[2];
 
     // box size
     real_t box_length[] = {
-        dims[0] * lattice_constant,
-        dims[1] * lattice_constant,
-        dims[2] * lattice_constant,
+        inputs.dims[0] * inputs.unit[0],
+        inputs.dims[1] * inputs.unit[1],
+        inputs.dims[2] * inputs.unit[2],
     };
 
     // Place particles on a lattice
@@ -315,11 +360,10 @@ int main(int argc, char* argv[])
 
     // set positions
     std::vector<real_t> x(3*num_parts);
-    init_fcc(x.data(), dims);
+    init_fcc(x.data(), inputs.dims);
 
     // scale
-    for (auto & xi : x )
-        xi *= lattice_constant;
+    scale(x.data(), inputs.unit, num_parts);
 
     // Give particles random velocities
     std::vector<real_t> v(num_parts*3);
@@ -329,17 +373,14 @@ int main(int argc, char* argv[])
     linear_mom(v.data(), num_parts);
 
     // scale velocities
-    auto num_dofs = 3*(num_parts - 1);
-    auto ke0 = dot_product(v.data(), num_parts);
-    auto T0 = mass * ke0 / (boltzmann*num_dofs);
-    auto fac = std::sqrt(temperature / T0 );
-    scale(v.data(), fac, num_parts);
+    auto T0 = scale_velocity(v.data(), inputs.mass, inputs.temperature,
+                             inputs.boltzmann, num_parts); 
 
     std::cout << "md>> Initial temperature: " << T0 << std::endl;
 
     int output_counter = 0;
     
-    if (output_freq) {
+    if (inputs.output_freq) {
         std::cout << "md>> outputing: " << output_counter << std::endl;
     	output(output_counter++, x.data(), v.data(), num_parts, max_digits);
     }
@@ -355,56 +396,60 @@ int main(int argc, char* argv[])
     std::cout << std::setw(15) << "Elapsed Time, s" << " |";
     std::cout << std::endl;
     std::cout << "md>> " << std::string(73, '=') << std::endl;
+
+#ifdef HAVE_VITIS
+    // move everything over
+#endif
 	
 
-    auto t = start_time;
+    auto t = inputs.start_time;
     auto elapsed_start = clock_timer_t::now();
 
     int iter = 0;
 
-    for (; iter<num_steps; ++iter, t+=dt)
+    for (; iter<inputs.num_steps; ++iter, t+=inputs.dt)
     {
 
         // get new atom positions
-        positions(v.data(), a.data(), x.data(), dt, num_parts);
+        positions(v.data(), a.data(), x.data(), inputs.dt, num_parts);
         periodic(x.data(), box_length, num_parts);
         
         // compute forces
         auto en = forces(x.data(), f.data(), box_length, num_parts);
 
         // accleration
-        accel(f.data(), v.data(), a.data(), mass, dt, num_parts);
+        accel(f.data(), v.data(), a.data(), inputs.mass, inputs.dt, num_parts);
         
         // remove linear momentum
         linear_mom(v.data(), num_parts);
         
         // scale velocities
-        auto num_dofs = 3*(num_parts - 1);
-        auto ke0 = dot_product(v.data(), num_parts);
-        auto T0 = mass * ke0 / (boltzmann*num_dofs);
-        auto fac = std::sqrt(temperature / T0 );
-        scale(v.data(), fac, num_parts);
+        auto T0 = scale_velocity(
+            v.data(), inputs.mass, inputs.temperature,
+            inputs.boltzmann, num_parts); 
 
-        std::chrono::duration<real_t> elapsed = clock_timer_t::now() - elapsed_start;
-        auto ss = std::cout.precision();
-    	std::cout << "md>> " << "| " << std::setw(15) << std::fixed << iter+1 << " | ";
-    	std::cout << std::setw(15) << std::scientific << t+dt << " | ";
-    	std::cout << std::setw(15) << std::scientific << T0 << " | ";  
-    	std::cout << std::setw(15) << std::scientific << elapsed.count() << " |";
-    	std::cout << std::endl; 
-        std::cout.precision(ss);
-	    std::cout.unsetf( std::ios::scientific );
-    
-	    // output
-	    if (output_freq && ((iter+1) % output_freq == 0)) {
+        if (inputs.stats_freq && ((iter+1) % inputs.stats_freq == 0)) {
+            std::chrono::duration<real_t> elapsed = clock_timer_t::now() - elapsed_start;
+            auto ss = std::cout.precision();
+    	    std::cout << "md>> " << "| " << std::setw(15) << std::fixed << iter+1 << " | ";
+    	    std::cout << std::setw(15) << std::scientific << t+inputs.dt << " | ";
+    	    std::cout << std::setw(15) << std::scientific << T0 << " | ";  
+    	    std::cout << std::setw(15) << std::scientific << elapsed.count() << " |";
+    	    std::cout << std::endl; 
+            std::cout.precision(ss);
+            std::cout.unsetf( std::ios::scientific );
+        }
+
+        // output
+        if (inputs.output_freq && ((iter+1) % inputs.output_freq == 0)) {
             std::cout << "md>> outputing: " << output_counter << std::endl;
-    		output(output_counter++, x.data(), v.data(), num_parts, max_digits);
-	    }
+            output(output_counter++, x.data(), v.data(), num_parts, max_digits);
+        }
         
     } // nstep
 	
     // output
-    if (output_freq && (iter % output_freq != 0)) {
+    if (inputs.output_freq && (iter % inputs.output_freq != 0)) {
         std::cout << "md>> outputing: " << output_counter << std::endl;
         output(output_counter++, x.data(), v.data(), num_parts, max_digits);
     }
