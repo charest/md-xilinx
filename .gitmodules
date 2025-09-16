@@ -1,0 +1,3 @@
+[submodule "XilinxCMake"]
+	path = XilinxCMake
+	url = https://github.com/Xilinx/cmakeModules
