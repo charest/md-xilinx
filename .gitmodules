@@ -1,3 +1,6 @@
 [submodule "XilinxCMake"]
 	path = XilinxCMake
 	url = https://github.com/Xilinx/cmakeModules
+[submodule "moleculardynamics"]
+	path = moleculardynamics
+	url = git@github.com:charest/moleculardynamics.git
